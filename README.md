@@ -33,16 +33,40 @@ file, then says when it's safe to unplug.
 
 ## Setup
 
+Installation has two parts: a **system part** that needs root, and a **per-user part**
+that doesn't. The kiosk's desktop user doesn't need sudo. The easiest way is to do both
+from an admin account:
+
 ```sh
-./install.sh
+sudo ./install.sh --user kiosk     # "kiosk" = the desktop user the kids use
 ```
 
-This installs `python3-gphoto2`, `python3-pyudev`, and GTK 3 bindings from apt. It
-adds a udev rule under `/etc/udev/rules.d/`, which asks for sudo. It copies the code to
-`~/.local/share/dcim-to-immich` and enables a systemd user service that starts
-with the desktop session. Run it as the kiosk's desktop user.
+Or split it up. An admin runs the system part, then the kiosk user turns it on for
+themselves (no sudo):
 
-Then fill in `~/.config/dcim-to-immich/config.json` (the installer creates a starter one):
+```sh
+sudo ./install.sh                  # admin
+./install.sh                       # kiosk user, from a copy of this folder they can read
+```
+
+The **system part** installs `python3-gphoto2`, `python3-pyudev` and GTK 3 bindings from
+apt. It also installs:
+
+- the udev rule, to `/etc/udev/rules.d/`
+- the program, to `/usr/local/lib/dcim-to-immich/`
+- a systemd *user* service, to `/etc/systemd/user/`
+
+It doesn't need to know who the kiosk user is. Camera access comes from the udev rule,
+which gives it to whoever is logged in at the screen, so no group changes are needed.
+
+The **per-user part** creates a starter config and enables the service, which then
+starts with that user's desktop session. `--user` does the same from root while they're
+logged out. If they're logged in, it restarts their copy.
+
+To update, re-run the same command.
+
+Then fill in the kiosk user's `~/.config/dcim-to-immich/config.json`. The installer
+creates a starter one; from the admin account, `sudo -u kiosk nano ~kiosk/.config/dcim-to-immich/config.json`.
 
 ```json
 {
@@ -67,7 +91,8 @@ no restart is needed.
 
 Logs: `journalctl --user -u dcim-to-immich -f`
 
-Remove it with `./uninstall.sh`. That leaves the config in place.
+Remove it with `sudo ./uninstall.sh --user kiosk`, or `./uninstall.sh` as a user to turn
+it off just for them. Either way the config is left in place.
 
 ### Why the udev rule?
 

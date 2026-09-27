@@ -6,7 +6,7 @@ After=graphical-session.target
 [Service]
 # System python, for the distro's python3-gi, python3-gphoto2 and python3-pyudev.
 ExecStart=/usr/bin/python3 -m dcim_to_immich
-Environment=PYTHONPATH=%h/.local/share/dcim-to-immich
+Environment=PYTHONPATH=/usr/local/lib/dcim-to-immich
 Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=5
