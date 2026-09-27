@@ -71,6 +71,7 @@ creates a starter one; from the admin account, `sudo -u kiosk nano ~kiosk/.confi
 ```json
 {
   "server": "https://photos.example.com",
+  "album": "Camera uploads",
   "users": {
     "Bob": "<Bob's Immich API key>",
     "Sue": "<Sue's Immich API key>"
@@ -80,11 +81,26 @@ creates a starter one; from the admin account, `sudo -u kiosk nano ~kiosk/.confi
 ```
 
 - **Keys:** make one per user in Immich (*Account Settings → API Keys*) while signed
-  in as that user. It only needs the `asset.upload` permission.
+  in as that user. It needs `asset.upload`; for albums, also `album.read`,
+  `album.create` and `albumAsset.create`.
+- **Album** (optional): every upload is added to this album, which is handy for finding
+  everything that came off the kiosk.
+  - **A name** (exact match): each user gets their own album with that name, made the
+    first time it's needed.
+  - **An album ID** (the UUID in the album's URL), as a plain string or `{"id": "<uuid>"}`:
+    used as-is. This is useful for an album shared with everyone. Give each kid "editor"
+    access to it.
+  - **One user in a different album:** write their entry as
+    `"Sue": {"key": "<Sue's key>", "album": "Sue's camera"}`.
+  - **If adding to the album fails**, e.g. a missing permission, files are still uploaded
+    and removed from the camera, and the final screen says the album step failed.
 - **Cameras:** `cameras` fills itself in as kids tap their names, for example
   `"Canon PowerShot SX20 IS#3C4E…": "Bob"`. Delete an entry to make that camera ask
   again, or change the name to reassign it.
 - **Removing a user:** remove them from `users`. Their cameras will ask again.
+
+If the file has a mistake (a typo in the JSON, a misspelled setting), plugging in a camera
+shows what's wrong and where, and doesn't touch the camera.
 
 The file is only readable by the kiosk user. Changes take effect on the next plug-in;
 no restart is needed.

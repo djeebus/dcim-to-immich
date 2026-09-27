@@ -228,6 +228,10 @@ class CameraWindow(Gtk.Window):
         self._finish()
         errors = "\n".join(f"{name}: {why}" for name, why in s.failed[:10])
         earlier = "".join(f"\n{_plural(n, 'file')} went to {who} before switching." for who, n in s.earlier.items())
+        if s.album_error:
+            earlier += f"\n\nCouldn't add them to the “{s.album}” album. Ask a grown-up: {s.album_error}"
+        elif s.album and s.uploaded:
+            earlier += f"\nThey're in the “{s.album}” album."
         if s.cancelled and not s.total:
             self._show_done("dialog-information", (earlier.strip() or "Nothing was changed on the camera."))
             return

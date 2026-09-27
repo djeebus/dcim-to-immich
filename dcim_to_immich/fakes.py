@@ -7,7 +7,7 @@ import time
 import uuid
 
 from .camera import CameraError, Identity, MediaItem
-from .immich import AuthError, ExistingAsset, UploadResult
+from .immich import AuthError, ExistingAsset, ImmichError, UploadResult
 
 
 class FakeCamera:
@@ -65,6 +65,8 @@ class FakeServer:
         self.libraries: dict[str, dict[str, ExistingAsset]] = {}  # key -> sha1 -> asset
         self.uploads: list[tuple[str, str]] = []  # (key, filename)
         self.lose_uploads = False  # say "created" but don't keep the file
+        self.albums: dict[str, dict[str, dict]] = {}  # key -> album id -> {"albumName", "assets"}
+        self.albums_forbidden = False
 
     def library(self, key: str) -> dict[str, ExistingAsset]:
         return self.libraries.setdefault(key, {})
@@ -97,3 +99,20 @@ class FakeImmich:
             self.srv.library(self.api_key)[hashlib.sha1(data).hexdigest()] = ExistingAsset(asset_id, False)
         self.srv.uploads.append((self.api_key, filename))
         return UploadResult(asset_id, "created")
+
+    def _albums(self):
+        if self.srv.albums_forbidden:
+            raise ImmichError("This API key isn't allowed to do that (it needs the album.read permission).", 403)
+        return self.srv.albums.setdefault(self.api_key, {})
+
+    def albums(self):
+        return [{"id": i, "albumName": a["albumName"]} for i, a in self._albums().items()]
+
+    def create_album(self, name):
+        album_id = str(uuid.uuid4())
+        self._albums()[album_id] = {"albumName": name, "assets": []}
+        return album_id
+
+    def add_to_album(self, album_id, asset_ids):
+        assets = self._albums()[album_id]["assets"]
+        assets.extend(a for a in asset_ids if a not in assets)

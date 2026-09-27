@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Protocol
 
 from .camera import CameraError, Identity, MediaItem
-from .config import CACHE_DIR, Config
-from .immich import AuthError, ImmichClient, ImmichError
+from .config import CACHE_DIR, Config, ConfigError
+from .immich import AuthError, ImmichClient, ImmichError, resolve_album
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,8 @@ class Summary:
     cancelled: bool = False
     # Files uploaded to someone else before a "Not <name>?" switch: user -> count.
     earlier: dict[str, int] = field(default_factory=dict)
+    album: str = ""  # as configured; "" if none
+    album_error: str | None = None  # why files couldn't be added to it
 
 
 class Events(Protocol):
@@ -71,6 +73,7 @@ class Job(threading.Thread):
         self._reassign = threading.Event()
         self._answers: queue.Queue[str | None] = queue.Queue()
         self._earlier: dict[str, int] = {}
+        self._album_id: str | None = None
 
     # Called from the UI thread.
     def cancel(self) -> None:
@@ -89,7 +92,7 @@ class Job(threading.Thread):
         except Cancelled:
             self.camera.close()
             self.events.finished(Summary(cancelled=True, earlier=self._earlier))
-        except (CameraError, ImmichError) as e:
+        except (CameraError, ImmichError, ConfigError) as e:
             log.warning("job failed: %s", e)
             self.camera.close()
             self.events.failed(str(e))
@@ -134,12 +137,20 @@ class Job(threading.Thread):
         self.events.found(photos, len(items) - photos)
 
         summary.total = len(items)
+        self._album_id = None
+        summary.album = self.config.album_for(user)
+        if summary.album and items:
+            try:
+                self._album_id = resolve_album(client, summary.album)
+            except ImmichError as e:
+                log.warning("album %r: %s", summary.album, e)
+                summary.album_error = str(e)
         streak = 0
         for index, item in enumerate(items):
             self._check_cancel()
             self.events.progress(index, len(items), 0.0, item.name)
             try:
-                self._transfer(client, identity, user, item, index, len(items))
+                self._transfer(client, identity, user, item, index, len(items), summary)
                 summary.uploaded += 1
                 streak = 0
             except Cancelled:
@@ -182,7 +193,9 @@ class Job(threading.Thread):
             self.events.connected(identity, user)
             return client, user
 
-    def _transfer(self, client: ImmichClient, identity: Identity, user: str, item: MediaItem, index: int, total: int) -> None:
+    def _transfer(
+        self, client: ImmichClient, identity: Identity, user: str, item: MediaItem, index: int, total: int, summary: Summary
+    ) -> None:
         """Copy one file to Immich, and delete it from the camera only once Immich has it.
 
         The one rule: camera.delete() runs only after the server, asked by checksum,
@@ -233,6 +246,18 @@ class Job(threading.Thread):
 
             if existing.trashed:
                 raise Kept(f"It's in {user}'s Immich trash, so it's staying on the camera.")
+            self._add_to_album(client, existing.asset_id, summary)
             self.camera.delete(item)
         finally:
             os.unlink(tmp)
+
+    def _add_to_album(self, client: ImmichClient, asset_id: str, summary: Summary) -> None:
+        """Best effort: the file is already safe in Immich, so this never blocks the delete."""
+        if self._album_id is None:
+            return
+        try:
+            client.add_to_album(self._album_id, [asset_id])
+        except ImmichError as e:
+            log.warning("couldn't add %s to album %r: %s", asset_id, summary.album, e)
+            summary.album_error = str(e)
+            self._album_id = None  # don't keep failing on every file

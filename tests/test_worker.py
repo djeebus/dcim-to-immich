@@ -287,6 +287,76 @@ class JobTest(unittest.TestCase):
         self.assertEqual(list(cam.files), ["IMG_0002.JPG"])
         self.assertEqual(Config.load(self.config.path).cameras, {})
 
+    # -- albums ------------------------------------------------------------
+
+    def album_assets(self, key, name):
+        matches = [a for a in self.server.albums.get(key, {}).values() if a["albumName"] == name]
+        self.assertEqual(len(matches), 1, f"expected one {name!r} album for {key}")
+        return set(matches[0]["assets"])
+
+    def test_album_by_name_is_created_and_filled(self):
+        self.config.album = "Camera"
+        self.config.cameras[CAMERA_ID] = "Bob"
+        self.server.library("bob-key")[sha(b"dup")] = ExistingAsset("already-there", False)
+        cam = self.camera({"IMG_0001.JPG": b"a", "IMG_0002.JPG": b"dup"})
+        ev = RecordingEvents()
+        self.run_job(cam, ev)
+        # Both, including the one Immich already had.
+        lib = self.server.library("bob-key")
+        self.assertEqual(self.album_assets("bob-key", "Camera"), {lib[sha(b"a")].asset_id, "already-there"})
+        self.assertEqual((ev.summary.album, ev.summary.album_error), ("Camera", None))
+
+        # Next time, the same album is reused, not a second one made.
+        ev = RecordingEvents()
+        self.run_job(self.camera({"IMG_0003.JPG": b"c"}), ev)
+        self.assertEqual(len(self.album_assets("bob-key", "Camera")), 3)
+
+    def test_album_by_id_and_per_user_override(self):
+        self.config.album = "Everyone"
+        self.server.albums["sue-key"] = {"4f8a1c2e-0000-4000-8000-000000000001": {"albumName": "Sue's", "assets": []}}
+        self.config.users["sue"] = {"key": "sue-key", "album": "4f8a1c2e-0000-4000-8000-000000000001"}
+        self.config.cameras[CAMERA_ID] = "sue"
+        ev = RecordingEvents()
+        self.run_job(self.camera({"IMG_0001.JPG": b"a"}), ev)
+        self.assertEqual(len(self.album_assets("sue-key", "Sue's")), 1)
+        self.assertNotIn("Everyone", [a["albumName"] for a in self.server.albums["sue-key"].values()])
+
+    def test_unknown_album_id_is_an_error_not_a_new_album(self):
+        self.config.album = "4f8a1c2e-0000-4000-8000-00000000dead"
+        self.config.cameras[CAMERA_ID] = "Bob"
+        cam = self.camera({"IMG_0001.JPG": b"a"})
+        ev = RecordingEvents()
+        self.run_job(cam, ev)
+        self.assertIn("no album with ID", ev.summary.album_error)
+        self.assertEqual(self.server.albums.get("bob-key", {}), {})
+        self.assertEqual(cam.deleted, ["IMG_0001.JPG"])
+
+    def test_album_failure_still_uploads_and_deletes(self):
+        self.config.album = "Camera"
+        self.config.cameras[CAMERA_ID] = "Bob"
+        self.server.albums_forbidden = True
+        cam = self.camera({"IMG_0001.JPG": b"a", "IMG_0002.JPG": b"b"})
+        ev = RecordingEvents()
+        self.run_job(cam, ev)
+        self.assertEqual(cam.deleted, ["IMG_0001.JPG", "IMG_0002.JPG"])
+        self.assertIn("album.read", ev.summary.album_error)
+        self.assertEqual(ev.summary.failed, [])
+
+    def test_no_album_configured(self):
+        self.config.cameras[CAMERA_ID] = "Bob"
+        ev = RecordingEvents()
+        self.run_job(self.camera({"IMG_0001.JPG": b"a"}), ev)
+        self.assertEqual(self.server.albums, {})
+        self.assertEqual(ev.summary.album, "")
+
+    def test_trashed_file_not_added_to_album(self):
+        self.config.album = "Camera"
+        self.config.cameras[CAMERA_ID] = "Bob"
+        self.server.library("bob-key")[sha(b"t")] = ExistingAsset("trashed", True)
+        ev = RecordingEvents()
+        self.run_job(self.camera({"IMG_0001.JPG": b"t"}), ev)
+        self.assertEqual(self.album_assets("bob-key", "Camera"), set())
+
 
 class SummaryParseTest(unittest.TestCase):
     def test_parse(self):

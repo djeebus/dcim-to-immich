@@ -6,11 +6,12 @@ import http.client
 import json
 import mimetypes
 import os
+import re
 import ssl
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 CHUNK_SIZE = 1 << 20
 
@@ -39,6 +40,27 @@ class UploadResult:
 class ExistingAsset:
     asset_id: str
     trashed: bool
+
+
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+
+
+def resolve_album(client, name_or_id: str) -> str:
+    """Album ID for a configured album: an existing album's ID, or a name.
+
+    A name that doesn't exist yet is created, so every user can share one setting
+    (albums belong to each user) and get their own album.
+    """
+    albums = client.albums()
+    for a in albums:
+        if a.get("id") == name_or_id:
+            return a["id"]
+    if UUID_RE.fullmatch(name_or_id):
+        raise ImmichError(f"There's no album with ID {name_or_id} (or this key can't see it).")
+    for a in albums:
+        if a.get("albumName") == name_or_id:
+            return a["id"]
+    return client.create_album(name_or_id)
 
 
 def normalize_server(url: str) -> str:
@@ -192,3 +214,29 @@ class ImmichClient:
         if not isinstance(body, dict) or not body.get("id"):
             raise ImmichError(f"Unexpected upload response: {body!r}", status)
         return UploadResult(asset_id=body["id"], status=body.get("status", "created"))
+
+    # -- albums -------------------------------------------------------------
+
+    def _forbidden(self, status: int, permission: str) -> None:
+        if status == 403:
+            raise ImmichError(f"This API key isn't allowed to do that (it needs the {permission} permission).", status)
+
+    def albums(self) -> list[dict]:
+        status, body = self._request("GET", "/albums")
+        self._forbidden(status, "album.read")
+        return body if isinstance(body, list) else []
+
+    def create_album(self, name: str) -> str:
+        status, body = self._request("POST", "/albums", {"albumName": name})
+        self._forbidden(status, "album.create")
+        if not isinstance(body, dict) or not body.get("id"):
+            raise ImmichError(f"Unexpected response creating album: {body!r}", status)
+        return body["id"]
+
+    def add_to_album(self, album_id: str, asset_ids: list[str]) -> None:
+        status, body = self._request("PUT", f"/albums/{quote(album_id)}/assets", {"ids": asset_ids})
+        self._forbidden(status, "albumAsset.create")
+        for r in body if isinstance(body, list) else []:
+            # "duplicate" means it's already in the album, which is fine.
+            if not r.get("success") and r.get("error") != "duplicate":
+                raise ImmichError(f"Couldn't add to the album: {r.get('error', 'unknown error')}", status)

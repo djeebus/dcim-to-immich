@@ -28,6 +28,7 @@ starter_config() {
     cat <<'EOF'
 {
   "server": "https://photos.example.com",
+  "album": "Camera uploads",
   "users": {
     "Bob": "paste-bobs-immich-api-key-here",
     "Sue": "paste-sues-immich-api-key-here"

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pyudev
 from gi.repository import GLib, Gtk
 
 from .camera import GPhotoCamera
-from .config import Config
+from .config import Config, ConfigError
 from .ui import CameraWindow, GtkEvents
 from .worker import Job
 
@@ -27,8 +28,8 @@ def is_camera(device: pyudev.Device) -> bool:
 
 
 class App:
-    def __init__(self, config: Config):
-        self.config = config
+    def __init__(self, config_path: Path):
+        self.config_path = config_path
         self.windows: dict[str, CameraWindow] = {}
         self.context = pyudev.Context()
         self.monitor = pyudev.Monitor.from_netlink(self.context)
@@ -60,13 +61,22 @@ class App:
             log.warning("no bus/device number for %s", device.sys_path)
             return
         log.info("camera plugged in: %s at %s", props.get("ID_MODEL", "?"), port)
-        # Reload so cameras registered by another window are picked up.
-        self.config = Config.load(self.config.path)
-        window = CameraWindow(self.config)
-        camera = GPhotoCamera(port, usb_serial=props.get("ID_SERIAL_SHORT", ""))
-        window.job = Job(camera, self.config, GtkEvents(window))
+        # Loaded fresh each time: picks up edits, and cameras claimed in other windows.
+        problem = None
+        try:
+            config = Config.load(self.config_path)
+        except ConfigError as e:
+            log.error("%s", e)
+            config, problem = None, str(e)
+        window = CameraWindow(config or Config(path=self.config_path))
         window.connect("destroy", lambda *_: self.windows.pop(device.sys_path, None))
         self.windows[device.sys_path] = window
+        if config is None:
+            # Nothing touches the camera; unplugging closes this like any other window.
+            window.on_failed(f"{problem}\n\nAsk a grown-up to fix it.")
+            return
+        camera = GPhotoCamera(port, usb_serial=props.get("ID_SERIAL_SHORT", ""))
+        window.job = Job(camera, config, GtkEvents(window))
         window.job.start()
 
     def _remove(self, device: pyudev.Device) -> None:

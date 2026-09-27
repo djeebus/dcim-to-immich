@@ -5,9 +5,10 @@ import json
 import tempfile
 import threading
 import unittest
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from dcim_to_immich.immich import AuthError, ImmichClient, UnavailableError, normalize_server
+from dcim_to_immich.immich import AuthError, ImmichClient, ImmichError, UnavailableError, normalize_server, resolve_album
 
 KEY = "secret"
 
@@ -15,6 +16,7 @@ KEY = "secret"
 class Handler(BaseHTTPRequestHandler):
     assets = {}  # id -> sha1 bytes
     trashed = set()  # ids
+    albums = {}  # id -> {"albumName", "assets"}
 
     def log_message(self, *a):
         pass
@@ -36,14 +38,39 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._authed():
             return
+        if self.path == "/sub/api/albums":
+            return self._json(200, [{"id": i, "albumName": a["albumName"]} for i, a in self.albums.items()])
         if self.path == "/sub/api/users/me":
             return self._json(200, {"name": "Alice", "email": "a@example.com"})
         self._json(404, {"message": "nope"})
+
+    def do_PUT(self):
+        if not self._authed():
+            return
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        album_id = self.path.split("/")[-2]
+        if album_id not in self.albums:
+            return self._json(404, {"message": "Album not found"})
+        results = []
+        for asset_id in body["ids"]:
+            album = self.albums[album_id]["assets"]
+            if asset_id not in self.assets:
+                results.append({"id": asset_id, "success": False, "error": "not_found"})
+            elif asset_id in album:
+                results.append({"id": asset_id, "success": False, "error": "duplicate"})
+            else:
+                album.append(asset_id)
+                results.append({"id": asset_id, "success": True})
+        self._json(200, results)
 
     def do_POST(self):
         if not self._authed():
             return
         body = self.rfile.read(int(self.headers["Content-Length"]))
+        if self.path == "/sub/api/albums":
+            album_id = str(uuid.uuid4())
+            self.albums[album_id] = {"albumName": json.loads(body)["albumName"], "assets": []}
+            return self._json(201, {"id": album_id})
         if self.path == "/sub/api/assets/bulk-upload-check":
             req = json.loads(body)["assets"][0]
             match = [i for i, s in self.assets.items() if s.hex() == req["checksum"]]
@@ -116,6 +143,20 @@ class ImmichClientTest(unittest.TestCase):
         self.assertIsNone(client.find_existing(hashlib.sha1(b"other").hexdigest()))
         Handler.trashed.add(result.asset_id)
         self.assertTrue(client.find_existing(sha).trashed)
+
+    def test_albums(self):
+        client = ImmichClient(self.url, KEY)
+        Handler.assets["photo-1"] = b"x" * 20
+        album_id = resolve_album(client, "Camera")  # created
+        self.assertEqual(resolve_album(client, "Camera"), album_id)  # found by name
+        self.assertEqual(resolve_album(client, album_id), album_id)  # found by ID
+        with self.assertRaisesRegex(ImmichError, "no album with ID"):
+            resolve_album(client, "00000000-0000-4000-8000-000000000000")
+        client.add_to_album(album_id, ["photo-1"])
+        client.add_to_album(album_id, ["photo-1"])  # already there: fine
+        self.assertEqual(Handler.albums[album_id]["assets"], ["photo-1"])
+        with self.assertRaisesRegex(ImmichError, "not_found"):
+            client.add_to_album(album_id, ["nope"])
 
     def test_unreachable(self):
         with self.assertRaises(UnavailableError):

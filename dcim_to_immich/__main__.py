@@ -49,12 +49,12 @@ def main() -> None:
     if args.demo:
         tmp = Path(tempfile.mkdtemp(prefix="dcim-demo-"))
         users = {"Bob": "bob-key", "Sue": "sue-key", "Alex": "broken-key"}
-        demo(Config(path=tmp / "config.json", server="https://immich.example", users=users))
+        demo(Config(path=tmp / "config.json", server="https://immich.example", users=users, album="Camera uploads"))
         return
 
     from .app import App
 
-    App(Config.load(args.config)).run()
+    App(args.config).run()
 
 
 if __name__ == "__main__":
