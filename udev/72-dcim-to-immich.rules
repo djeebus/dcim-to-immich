@@ -1,0 +1,27 @@
+# dcim-to-immich: take over PTP cameras and MTP devices (phones, some cameras).
+#
+# - Tag them DCIM_TO_IMMICH=1; that's what the app watches for.
+# - Hide them from the desktop's own camera/phone handling (GNOME gvfs, KDE Solid,
+#   "open with..." popups). Those grab the USB device, and libgphoto2 then can't.
+# - Let the logged-in user open them.
+#
+# Runs after 60-libgphoto2 (sets ID_GPHOTO2 for PTP), 69-libmtp (sets
+# ID_MTP_DEVICE from its hwdb or by probing) and 70-uaccess, and before
+# 73-seat-late (which applies the uaccess tag).
+
+ACTION!="add|bind", GOTO="dcim_to_immich_end"
+SUBSYSTEM!="usb", GOTO="dcim_to_immich_end"
+ENV{DEVTYPE}!="usb_device", GOTO="dcim_to_immich_end"
+
+# PTP: interface class 06 (still image), subclass 01, protocol 01.
+ENV{ID_USB_INTERFACES}=="*:060101:*", GOTO="dcim_to_immich_match"
+# MTP: often a vendor-specific interface, recognised by libmtp.
+ENV{ID_MTP_DEVICE}=="1", GOTO="dcim_to_immich_match"
+
+GOTO="dcim_to_immich_end"
+
+LABEL="dcim_to_immich_match"
+ENV{DCIM_TO_IMMICH}="1", TAG+="uaccess"
+ENV{ID_GPHOTO2}="", ENV{GPHOTO2_DRIVER}="", ENV{ID_MTP_DEVICE}="", ENV{ID_MEDIA_PLAYER}=""
+
+LABEL="dcim_to_immich_end"

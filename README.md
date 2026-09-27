@@ -1,0 +1,99 @@
+# dcim-to-immich
+
+A touchscreen kiosk for camera uploads. Kids plug a camera in, tap their name, and its
+photos and videos go to their [Immich](https://immich.app) library. Then they're
+deleted from the camera.
+
+Built for a Canon PowerShot SX20 IS on Ubuntu 26.04. It picks up any USB device that
+speaks PTP (almost every camera) or MTP (phones, some cameras); no per-model setup.
+Only files under the device's `DCIM/` folder are touched.
+
+## What happens when a camera is plugged in
+
+1. A window opens and reads the camera's model and **serial number**. Each camera is
+   identified by serial, so two identical SX20s can belong to different kids.
+2. **A camera nobody has claimed yet** shows *"Whose camera is this?"* with a big button
+   for each user. Tapping a name assigns the camera to that person from then on. Tapping
+   **Cancel** changes nothing, and the camera will ask again next time.
+3. It shows how many photos and videos are on the camera, then a progress bar as they
+   upload.
+4. Each file is copied off the camera, SHA-1 checksummed, and uploaded. **It is deleted
+   from the camera only after Immich, asked by that checksum, confirms the user's library
+   holds exactly those bytes, and not just in the trash.** Files already there aren't
+   uploaded again; they're just removed from the camera. Nothing else on the camera
+   is ever deleted.
+5. Tapped the wrong name? **Not Bob?** (shown during the upload) stops and asks again.
+   Files that already went to Bob stay in Bob's library; the rest go to whoever is picked.
+6. When it's finished, the window says **it's safe to unplug the camera**. Unplugging
+   closes the window.
+
+Files that fail stay on the camera and are retried next time. After three failures in a
+row, or if the user's key is rejected, it stops early. **Stop** finishes the current
+file, then says when it's safe to unplug.
+
+## Setup
+
+```sh
+./install.sh
+```
+
+This installs `python3-gphoto2`, `python3-pyudev`, and GTK 3 bindings from apt. It
+adds a udev rule under `/etc/udev/rules.d/`, which asks for sudo. It copies the code to
+`~/.local/share/dcim-to-immich` and enables a systemd user service that starts
+with the desktop session. Run it as the kiosk's desktop user.
+
+Then fill in `~/.config/dcim-to-immich/config.json` (the installer creates a starter one):
+
+```json
+{
+  "server": "https://photos.example.com",
+  "users": {
+    "Bob": "<Bob's Immich API key>",
+    "Sue": "<Sue's Immich API key>"
+  },
+  "cameras": {}
+}
+```
+
+- **Keys:** make one per user in Immich (*Account Settings → API Keys*) while signed
+  in as that user. It only needs the `asset.upload` permission.
+- **Cameras:** `cameras` fills itself in as kids tap their names, for example
+  `"Canon PowerShot SX20 IS#3C4E…": "Bob"`. Delete an entry to make that camera ask
+  again, or change the name to reassign it.
+- **Removing a user:** remove them from `users`. Their cameras will ask again.
+
+The file is only readable by the kiosk user. Changes take effect on the next plug-in;
+no restart is needed.
+
+Logs: `journalctl --user -u dcim-to-immich -f`
+
+Remove it with `./uninstall.sh`. That leaves the config in place.
+
+### Why the udev rule?
+
+When the camera is plugged in, the desktop claims it for its own camera browser
+(GNOME's gvfs, KDE's Solid). Once it has, nothing else can talk to the camera. The rule
+(`udev/72-dcim-to-immich.rules`) matches every PTP/MTP device: interface class
+`06/01/01`, or anything libmtp recognises as MTP. It tags the device for this app, hides
+it from the desktop, and lets the logged-in user open it. If the desktop grabs one
+anyway, the app runs `gio mount -s gphoto2` to release it and retries.
+
+So phones plugged into the kiosk won't show up in the file manager. They get the same
+"Whose camera is this?" prompt, and **Cancel** leaves them alone.
+
+## Development
+
+```sh
+python3 -m unittest discover -s tests -t .   # tests (fake camera + fake Immich HTTP server)
+python3 -m dcim_to_immich --demo             # try the UI: fake camera, users Bob/Sue/Alex (Alex's key is broken)
+python3 -m dcim_to_immich -v                 # run the watcher in the foreground
+```
+
+Code layout (`dcim_to_immich/`):
+
+- `app.py`: watches udev for cameras coming and going; opens one window and job per camera
+- `worker.py`: per-camera job: identify, pick user, upload, verify, delete
+- `camera.py`: libgphoto2 access (serial number, DCIM listing, chunked download, delete)
+- `immich.py`: Immich API client with streaming uploads (large videos never sit in memory)
+- `ui.py`: the touch-sized GTK window
+- `config.py`: config file

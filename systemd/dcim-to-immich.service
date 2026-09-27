@@ -1,0 +1,15 @@
+[Unit]
+Description=Upload photos and videos from USB cameras to Immich
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+# System python, for the distro's python3-gi, python3-gphoto2 and python3-pyudev.
+ExecStart=/usr/bin/python3 -m dcim_to_immich
+Environment=PYTHONPATH=%h/.local/share/dcim-to-immich
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
